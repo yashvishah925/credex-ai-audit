@@ -9,13 +9,19 @@ function App() {
   return (
     <BrowserRouter>
       <Routes>
+
         <Route path="/" element={<LandingPage />} />
+
         <Route path="/form" element={<FormPage />} />
+
         <Route path="/results" element={<ResultsPage />} />
+
         <Route path="/summary" element={<SummaryPage />} />
+
       </Routes>
     </BrowserRouter>
   );
 }
 
 export default App;
+
