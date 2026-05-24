@@ -8,20 +8,23 @@ import SummaryPage from "./pages/SummaryPage";
 function App() {
   return (
     <BrowserRouter>
+
       <Routes>
 
         <Route path="/" element={<LandingPage />} />
 
         <Route path="/form" element={<FormPage />} />
 
-        <Route path="/results" element={<ResultsPage />} />
+        {/* AUDIT ENGINE PAGE */}
+        <Route path="/audit" element={<ResultsPage />} />
 
-        <Route path="/summary" element={<SummaryPage />} />
+        {/* FINAL RESULTS + SUMMARY */}
+        <Route path="/results" element={<SummaryPage />} />
 
       </Routes>
+
     </BrowserRouter>
   );
 }
 
 export default App;
-

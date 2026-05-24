@@ -104,7 +104,7 @@ function FormPage() {
   function handleSubmit(e) {
     e.preventDefault();
 
-    navigate("/results");
+    navigate("/audit");
   }
 
   return (
