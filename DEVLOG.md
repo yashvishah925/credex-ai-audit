@@ -132,3 +132,37 @@ Still need to implement backend persistence for lead capture, transactional emai
 
 **Plan for tomorrow:**  
 Implement Supabase lead storage, transactional email integration, public audit result URLs, and complete the remaining documentation and testing setup.
+
+## Day 6 — 2026-05-25
+
+**Hours worked:** 6
+
+**What I did:**  
+- Finalized routing structure between form, audit engine, and audit results pages  
+- Refactored audit engine flow to separate audit evaluation from final summary display  
+- Improved conditional rendering for high-savings and low-savings audit states  
+- Added responsive UI adjustments for audit results cards and summary sections  
+- Configured Supabase project and connected environment variables  
+- Created Supabase database table for lead storage  
+- Installed and configured Resend transactional email infrastructure  
+- Added frontend Supabase client configuration using environment variables  
+- Updated pricing data and pricing source documentation for all supported AI tools  
+- Reviewed assignment architecture and clarified implementation plan for shareable public audit URLs and AI-generated summaries  
+
+**What I learned:**  
+- Separating audit evaluation logic from results presentation significantly simplified the routing and page structure  
+- Supabase setup and environment configuration are straightforward once the data flow is clearly defined  
+- The assignment is testing product thinking and infrastructure design as much as frontend implementation  
+- Conditional UI messaging based on savings tiers creates a more realistic SaaS-style audit experience  
+
+**Blockers / what I'm stuck on:**  
+- Still need to implement actual lead persistence flow from frontend to Supabase  
+- AI summary integration is pending because Anthropic API now requires paid credits; evaluating OpenAI/fallback strategy instead  
+- Shareable public audit URL architecture still needs implementation planning and backend wiring  
+
+**Plan for tomorrow:**  
+- Implement lead capture form submission and save data to Supabase  
+- Add transactional email sending using Resend  
+- Implement AI-generated summary flow with graceful fallback handling  
+- Build public shareable audit URL flow and public audit results page  
+- Continue polishing documentation files and test coverage  
