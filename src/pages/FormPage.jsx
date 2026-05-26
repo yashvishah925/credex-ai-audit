@@ -1,3 +1,4 @@
+import { supabase } from "../lib/supabase";
 import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { pricingData } from "../data/pricingData";
@@ -101,11 +102,102 @@ function FormPage() {
     SUBMIT
   */
 
-  function handleSubmit(e) {
-    e.preventDefault();
+  async function handleSubmit(e) {
+  e.preventDefault();
 
-    navigate("/audit");
+  try {
+
+    /*
+      GENERATE PUBLIC SHARE ID
+    */
+
+    const publicId = crypto.randomUUID();
+
+    /*
+      CALCULATE TOTAL SPEND
+    */
+
+    const totalSavings = tools.reduce((sum, tool) => {
+      return sum + Number(tool.monthlySpend || 0);
+    }, 0);
+
+    /*
+      SAVE TO SUPABASE
+    */
+
+    const { error } = await supabase
+      .from("leads")
+      .insert([
+        {
+          email: "demo@credex.ai",
+
+          company: company.useCase,
+
+          role: "Founder",
+
+          team_size: company.teamSize,
+
+          monthly_savings: totalSavings,
+
+          public_id: publicId,
+
+          audit_data: {
+            company,
+            tools
+          }
+        }
+      ]);
+
+    if (error) {
+      console.error(error);
+
+      alert("Failed to save audit");
+
+      return;
+    }
+
+    /*
+      SAVE PUBLIC ID
+    */
+
+    localStorage.setItem(
+      "publicAuditId",
+      publicId
+    );
+
+    /*
+      NAVIGATE
+    */
+
+  /*
+  SEND EMAIL
+*/
+
+await fetch("http://localhost:5000/send-email", {
+  method: "POST",
+
+  headers: {
+    "Content-Type": "application/json"
+  },
+
+  body: JSON.stringify({
+    email: "syashvi569@gmail.com",
+    savings: totalSavings
+  })
+});
+
+/*
+  GO TO PUBLIC SHAREABLE PAGE
+*/
+
+navigate("/audit");
+
+  } catch (err) {
+    console.error(err);
+
+    alert("Something went wrong");
   }
+}
 
   return (
     <div className="min-h-screen bg-[#f5f7fb] px-6 py-10">

@@ -1,3 +1,4 @@
+import PublicAuditPage from "./pages/PublicAuditPage";
 import { BrowserRouter, Routes, Route } from "react-router-dom";
 
 import LandingPage from "./pages/LandingPage";
@@ -10,6 +11,7 @@ function App() {
     <BrowserRouter>
 
       <Routes>
+        <Route path="/audit/:id" element={<PublicAuditPage />} />
 
         <Route path="/" element={<LandingPage />} />
 

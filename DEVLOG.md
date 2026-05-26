@@ -166,3 +166,41 @@ Implement Supabase lead storage, transactional email integration, public audit r
 - Implement AI-generated summary flow with graceful fallback handling  
 - Build public shareable audit URL flow and public audit results page  
 - Continue polishing documentation files and test coverage  
+
+## Day 1 — 2026-05-26
+
+**Hours worked:** 8
+
+**What I did:**  
+- Continued development of the Credex AI Audit web application using React + Vite.  
+- Implemented and refined the audit results page with per-tool AI spend breakdowns, recommended actions, monthly savings, and annual savings calculations.  
+- Added high-savings and optimized-user conditional result sections based on audit outcomes.  
+- Built the AI-generated financial evaluation summary section and connected fallback handling when API responses fail.  
+- Integrated Supabase backend setup for storing lead capture data.  
+- Created and configured the `leads` table schema in Supabase with fields for email, company, role, team size, savings, audit data, and timestamps.  
+- Integrated Resend transactional email API into the backend server and successfully configured email delivery flow.  
+- Verified successful audit email delivery using Resend test emails.  
+- Added Express backend routes for sending transactional emails.  
+- Worked on dynamic routing for public shareable audit URLs using React Router.  
+- Fixed multiple frontend and backend integration issues related to navigation flow, Supabase schema mismatches, audit routes, and email request handling.  
+- Debugged issues where audit results routing was incorrectly redirecting users to the public shareable page.  
+- Tested multiple AI tool combinations and savings scenarios to verify audit engine calculations and UI behavior.
+
+**What I learned:**  
+- Better understanding of Supabase schema management and frontend/backend integration.  
+- Learned how transactional email workflows operate using Resend.  
+- Improved debugging skills for React Router navigation issues and async API handling.  
+- Learned the importance of stabilizing working features before making major structural changes.
+
+**Blockers / what I'm stuck on:**  
+- Public shareable audit page still needs full audit data rendering and UI improvements.  
+- Email form occasionally displays a frontend error message even though emails are successfully delivered.  
+- Desktop responsiveness and layout polish are still pending.
+
+**Plan for tomorrow:**  
+- Improve responsiveness and optimize layouts for desktop and tablet devices.  
+- Fix remaining frontend email submission error handling.  
+- Complete the public shareable audit page design and functionality.  
+- Add abuse protection (honeypot/rate limiting).  
+- Finalize documentation files including README.md, PROMPTS.md, and PRICING_DATA.md.  
+- Push stable commits and deployment-ready code to GitHub.

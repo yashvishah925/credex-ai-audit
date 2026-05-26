@@ -6,6 +6,7 @@
   "scripts": {
     "dev": "vite",
     "build": "vite build",
+    "server": "nodemon server/server.js",
     "lint": "eslint .",
     "preview": "vite preview"
   },
@@ -19,7 +20,7 @@
     "react": "^19.2.6",
     "react-dom": "^19.2.6",
     "react-router-dom": "^7.15.1",
-    "resend": "^6.12.3",
+    "resend": "^6.12.4",
     "tailwindcss": "^4.3.0"
   },
   "devDependencies": {
@@ -31,6 +32,7 @@
     "eslint-plugin-react-hooks": "^7.1.1",
     "eslint-plugin-react-refresh": "^0.5.2",
     "globals": "^17.6.0",
+    "nodemon": "^3.1.14",
     "vite": "^8.0.12"
   }
 }
