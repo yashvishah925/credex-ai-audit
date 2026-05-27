@@ -158,7 +158,7 @@ function SummaryPage() {
   // ── Share record ─────────────────────────────────────────────────────────────
   async function generateShareRecord({ tools, company, audit }) {
     try {
-      const id = crypto.randomUUID();
+      const id = Date.now().toString();
       const { error } = await supabase.from("audit_shares").insert({
         share_id: id,
         tools_data: tools,
