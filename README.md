@@ -1,16 +1,133 @@
-# React + Vite
+# Credex AI Audit Platform
 
-This template provides a minimal setup to get React working in Vite with HMR and some ESLint rules.
+Credex AI Audit is a full-stack AI spend optimization platform built for startups and modern engineering teams to analyze AI software subscriptions, detect redundant spending, and generate actionable savings recommendations across tools like ChatGPT, Claude, Cursor, GitHub Copilot, Gemini, and Windsurf.
 
-Currently, two official plugins are available:
+The platform provides a real-time audit engine, AI-generated executive summaries, shareable audit reports, transactional email delivery, and persistent lead capture using Supabase + Resend infrastructure.
 
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Oxc](https://oxc.rs)
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/)
+---
 
-## React Compiler
+# Live Demo
 
-The React Compiler is not enabled on this template because of its impact on dev & build performances. To add it, see [this documentation](https://react.dev/learn/react-compiler/installation).
+Deployed URL:https://credex-ai-audit-app.vercel.app/
 
-## Expanding the ESLint configuration
 
-If you are developing a production application, we recommend using TypeScript with type-aware lint rules enabled. Check out the [TS template](https://github.com/vitejs/vite/tree/main/packages/create-vite/template-react-ts) for information on how to integrate TypeScript and [`typescript-eslint`](https://typescript-eslint.io) in your project.
+GitHub Repository:https://github.com/yashvishah925/credex-ai-audit
+
+
+
+# Features
+
+## AI Spend Audit Engine
+- Multi-tool AI stack analysis
+- Detects plan oversizing
+- Finds cheaper vendor alternatives
+- Evaluates annual billing savings
+- Flags API vs retail inefficiencies
+
+Supported platforms:
+- Cursor
+- GitHub Copilot
+- Claude
+- ChatGPT
+- Anthropic API
+- OpenAI API
+- Gemini
+- Windsurf
+
+---
+
+## Dynamic Audit Logic
+The audit engine evaluates:
+- Plan fit based on seat count
+- Same-vendor pricing optimization
+- Alternative tool overlap
+- Retail vs API credit inefficiencies
+
+All pricing logic references official vendor pricing pages verified in May 2026.
+
+---
+
+## AI-Generated Executive Summary
+Uses Anthropic Claude API to generate:
+- Personalized audit summaries
+- Cost optimization insights
+- Executive-ready reporting language
+
+Fallback templated summaries are used during API failures.
+
+---
+
+## Shareable Public Audit URLs
+Every audit generates:
+- Unique public share link
+- Sanitized public-facing report
+- Open Graph + Twitter preview metadata
+
+Sensitive lead information is stripped from public reports.
+
+---
+
+## Persistent Form State
+Audit form data persists automatically using:
+- localStorage persistence
+- reload-safe recovery
+
+---
+
+## Lead Capture + Backend
+Built with:
+- Supabase database
+- Resend transactional email delivery
+- Client-side rate limiting
+- Honeypot anti-spam protection
+
+---
+
+# Tech Stack
+
+## Frontend
+- React
+- Vite
+- React Router
+- TailwindCSS
+
+## Backend
+- Express.js
+- Node.js
+
+## Database
+- Supabase
+
+## Email Infrastructure
+- Resend
+
+## AI Integration
+- Anthropic Claude API
+
+## Deployment
+- Vercel
+
+---
+
+# Folder Structure
+
+```bash
+src/
+ ├── components/
+ ├── pages/
+ ├── data/
+ ├── utils/
+ ├── lib/
+ └── assets/
+
+server/
+ ├── index.js
+ └── api/
+
+docs/
+ ├── ARCHITECTURE.md
+ ├── DEVLOG.md
+ ├── GTM.md
+ ├── ECONOMICS.md
+ ├── PROMPTS.md
+ └── REFLECTION.md
