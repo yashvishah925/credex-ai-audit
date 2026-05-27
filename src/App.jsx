@@ -1,4 +1,3 @@
-import PublicAuditPage from "./pages/PublicAuditPage";
 import { BrowserRouter, Routes, Route } from "react-router-dom";
 
 import LandingPage from "./pages/LandingPage";
@@ -9,22 +8,24 @@ import SummaryPage from "./pages/SummaryPage";
 function App() {
   return (
     <BrowserRouter>
-
       <Routes>
-        <Route path="/audit/:id" element={<PublicAuditPage />} />
 
+        {/* Landing */}
         <Route path="/" element={<LandingPage />} />
 
+        {/* Form */}
         <Route path="/form" element={<FormPage />} />
 
-        {/* AUDIT ENGINE PAGE */}
+        {/* Audit Engine Page */}
         <Route path="/audit" element={<ResultsPage />} />
 
-        {/* FINAL RESULTS + SUMMARY */}
-        <Route path="/results" element={<SummaryPage />} />
+        {/* Final Summary Page */}
+        <Route path="/summary" element={<SummaryPage />} />
+
+        {/* Shareable Public URL */}
+        <Route path="/share/:shareId" element={<SummaryPage />} />
 
       </Routes>
-
     </BrowserRouter>
   );
 }

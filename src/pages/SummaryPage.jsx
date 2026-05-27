@@ -1,52 +1,47 @@
-import { useEffect, useState, useRef } from "react";
+import { useEffect, useState, useRef, useCallback } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import { runAudit } from "../utils/auditEngine";
-
-// ─────────────────────────────────────────────
-// Supabase client (replace with your credentials)
-// ─────────────────────────────────────────────
 import { createClient } from "@supabase/supabase-js";
+
 const supabase = createClient(
   import.meta.env.VITE_SUPABASE_URL,
   import.meta.env.VITE_SUPABASE_ANON_KEY
 );
 
-// ─────────────────────────────────────────────
-// Tool emoji map
-// ─────────────────────────────────────────────
 const TOOL_EMOJI = {
-  ChatGPT: "🤖", Claude: "✦", Midjourney: "🎨", Notion: "📝",
-  Copilot: "💻", Gemini: "✨", Perplexity: "🔍", Jasper: "📣",
+  ChatGPT: "🤖", Claude: "✦", Cursor: "💻", Gemini: "✨", v0: "🎨",
+  Midjourney: "🎨", Notion: "📝", "GitHub Copilot": "💻", Windsurf: "🌊",
+  Perplexity: "🔍", Jasper: "📣", "Anthropic API": "⚡", "OpenAI API": "⚡",
   default: "🤖",
 };
 
-// ─────────────────────────────────────────────
-// Honeypot + rate-limit helpers (abuse protection)
-// ─────────────────────────────────────────────
-function getRateLimitKey() {
-  return `credex_lead_ts_${new Date().toDateString()}`;
-}
+// ─── Rate limiting (localStorage-backed, client-side layer 1 of 2) ────────────
+// Layer 2 is enforced server-side in the API route by IP address.
+function getRateLimitKey() { return `credex_lead_ts_${new Date().toDateString()}`; }
 function isRateLimited() {
-  try {
-    const count = parseInt(localStorage.getItem(getRateLimitKey()) || "0");
-    return count >= 3; // max 3 submissions per day per device
-  } catch { return false; }
+  try { return parseInt(localStorage.getItem(getRateLimitKey()) || "0") >= 3; }
+  catch { return false; }
 }
 function incrementRateLimit() {
   try {
     const k = getRateLimitKey();
-    localStorage.setItem(k, String((parseInt(localStorage.getItem(k) || "0")) + 1));
+    localStorage.setItem(k, String(parseInt(localStorage.getItem(k) || "0") + 1));
   } catch {}
 }
 
-// ─────────────────────────────────────────────
-// OG meta tag updater (for share preview)
-// ─────────────────────────────────────────────
+// ─── OG / Twitter meta tags ──────────────────────────────────────────────────
 function setOGMeta({ title, description, url }) {
   const set = (prop, content) => {
     let el = document.querySelector(`meta[property="${prop}"]`)
-      || document.querySelector(`meta[name="${prop}"]`);
-    if (!el) { el = document.createElement("meta"); el.setAttribute(prop.startsWith("og:") || prop.startsWith("twitter:") ? "property" : "name", prop); document.head.appendChild(el); }
+          || document.querySelector(`meta[name="${prop}"]`);
+    if (!el) {
+      el = document.createElement("meta");
+      el.setAttribute(
+        prop.startsWith("og:") || prop.startsWith("twitter:") ? "property" : "name",
+        prop
+      );
+      document.head.appendChild(el);
+    }
     el.setAttribute("content", content);
   };
   document.title = title;
@@ -61,95 +56,111 @@ function setOGMeta({ title, description, url }) {
   set("twitter:image", `${window.location.origin}/og-preview.png`);
 }
 
-// ─────────────────────────────────────────────
-// Main component
-// ─────────────────────────────────────────────
+// ─── Loading screen ───────────────────────────────────────────────────────────
+function LoadingScreen({ message = "Loading audit…" }) {
+  return (
+    <div className="min-h-screen bg-[#f4f7fb] flex items-center justify-center px-4">
+      <div className="text-center w-full max-w-sm">
+        <div className="flex gap-1.5 justify-center mb-4">
+          {[0, 150, 300].map(d => (
+            <span key={d} className="w-2 h-2 rounded-full bg-[#032f24] animate-bounce"
+              style={{ animationDelay: `${d}ms` }} />
+          ))}
+        </div>
+        <p className="text-sm text-gray-500 font-medium">{message}</p>
+      </div>
+    </div>
+  );
+}
+
+// ─── Main component ───────────────────────────────────────────────────────────
 function SummaryPage() {
   const navigate = useNavigate();
-  const { shareId } = useParams(); // present on public /share/:id route
+  const { shareId } = useParams();
   const isPublicView = Boolean(shareId);
 
+  const [pageState, setPageState] = useState("loading");
+  const [auditResult, setAuditResult] = useState(null);
+  const [publicMeta, setPublicMeta] = useState(null);
+
   const [summary, setSummary] = useState("");
-  const [loading, setLoading] = useState(true);
-  const [auditData, setAuditData] = useState(null);
+  const [summaryLoading, setSummaryLoading] = useState(true);
+
   const [shareUrl, setShareUrl] = useState("");
   const [copied, setCopied] = useState(false);
 
-  // Lead capture state
   const [email, setEmail] = useState("");
   const [companyName, setCompanyName] = useState("");
   const [role, setRole] = useState("");
   const [emailSent, setEmailSent] = useState(false);
   const [emailError, setEmailError] = useState("");
   const [submitting, setSubmitting] = useState(false);
-  const honeypotRef = useRef(null); // honeypot field ref
 
-  // ── LOAD AUDIT DATA (local or from Supabase for public share) ──
+  // ── Honeypot ref — hidden field bots fill, humans don't ──────────────────────
+  const honeypotRef = useRef(null);
+
+  // ── Load & process audit data ────────────────────────────────────────────────
   useEffect(() => {
-    async function loadData() {
+    let cancelled = false;
+
+    async function init() {
       if (isPublicView) {
-        // Public share: fetch stripped record from Supabase
         const { data, error } = await supabase
           .from("audit_shares")
-          .select("tools_data, company_use_case, company_team_size, audit_results, created_at")
+          .select("tools_data, company_use_case, company_team_size, audit_results")
           .eq("share_id", shareId)
           .single();
-        if (error || !data) { setAuditData(null); setLoading(false); return; }
-        setAuditData({ fromShare: true, ...data });
+
+        if (cancelled) return;
+        if (error || !data) { setPageState("notfound"); return; }
+
+        const audit = data.audit_results;
+        const company = { useCase: data.company_use_case, teamSize: data.company_team_size };
+
         setOGMeta({
-          title: `AI Stack Audit — ${data.audit_results?.totalSavings > 0 ? `Save $${(data.audit_results.totalSavings * 12).toFixed(0)}/yr` : "Optimized Stack"}`,
-          description: `${data.company_team_size}-person team · ${data.audit_results?.auditedTools?.length || 0} tools audited · Powered by Credex`,
+          title: `AI Stack Audit — ${audit.totalSavings > 0 ? `Save $${Math.round(audit.totalSavings * 12)}/yr` : "Optimized Stack"} · Credex`,
+          description: `${company.teamSize}-person team · ${audit.auditedTools?.length || 0} tools audited · Powered by Credex`,
           url: window.location.href,
         });
-        setLoading(false);
+
+        setAuditResult({ ...audit, company });
+        setPublicMeta({ teamSize: company.teamSize, useCase: company.useCase });
+        setPageState("ready");
+        fetchAISummary({ ...audit, company });
+
       } else {
-        // Normal flow: read localStorage
-        const saved = (() => { try { return JSON.parse(localStorage.getItem("credexAuditForm")); } catch { return null; } })();
-        if (!saved?.tools || !saved?.company) { setAuditData(null); setLoading(false); return; }
-        setAuditData({ fromShare: false, saved });
+        let saved = null;
+        try { saved = JSON.parse(localStorage.getItem("credexAuditForm")); } catch {}
+
+        if (!saved?.tools || !saved?.company) { setPageState("notfound"); return; }
+
+        const company = saved.company;
+        const tools = saved.tools;
+        const audit = runAudit(tools, company);
+
+        if (cancelled) return;
+
+        setAuditResult({ ...audit, company });
+        setPageState("ready");
+
+        generateShareRecord({ tools, company, audit }).then(id => {
+          if (!cancelled && id) setShareUrl(`${window.location.origin}/share/${id}`);
+        });
+
+        fetchAISummary({ ...audit, company });
       }
     }
-    loadData();
-  }, [shareId]);
 
-  // ── RUN AUDIT + AI SUMMARY ──
-  useEffect(() => {
-    if (!auditData) return;
+    init();
+    return () => { cancelled = true; };
+  }, [shareId]); // eslint-disable-line react-hooks/exhaustive-deps
 
-    let tools, company, audit;
-    if (auditData.fromShare) {
-      tools = auditData.tools_data;
-      company = { useCase: auditData.company_use_case, teamSize: auditData.company_team_size };
-      audit = auditData.audit_results;
-    } else {
-      tools = auditData.saved.tools;
-      company = auditData.saved.company;
-      audit = runAudit(tools, company);
-    }
-
-    const { auditedTools, totalSavings, totalCurrentSpend, optimizedSpend } = audit;
-    const annualSavings = totalSavings * 12;
-
-    // Store processed audit on state for rendering
-    auditData._processed = { tools, company, audit, auditedTools, totalSavings, totalCurrentSpend, optimizedSpend, annualSavings };
-
-    // Generate + store share URL (only on first non-public visit)
-    if (!auditData.fromShare) {
-      generateShareRecord({ tools, company, audit }).then(id => {
-        if (id) setShareUrl(`${window.location.origin}/share/${id}`);
-      });
-    }
-
-    // Fetch AI summary
-    fetchAISummary({ auditedTools, totalSavings, totalCurrentSpend, optimizedSpend, annualSavings, company });
-  }, [auditData]);
-
-  // ── GENERATE SUPABASE SHARE RECORD ──
+  // ── Share record ─────────────────────────────────────────────────────────────
   async function generateShareRecord({ tools, company, audit }) {
     try {
-      const shareId = crypto.randomUUID();
+      const id = crypto.randomUUID();
       const { error } = await supabase.from("audit_shares").insert({
-        share_id: shareId,
+        share_id: id,
         tools_data: tools,
         company_use_case: company.useCase,
         company_team_size: company.teamSize,
@@ -157,22 +168,56 @@ function SummaryPage() {
         created_at: new Date().toISOString(),
       });
       if (error) throw error;
-      return shareId;
+      return id;
     } catch (err) {
       console.warn("Share record creation failed:", err.message);
       return null;
     }
   }
 
-  // ── AI SUMMARY ──
+  // ── AI summary ───────────────────────────────────────────────────────────────
   async function fetchAISummary({ auditedTools, totalSavings, totalCurrentSpend, optimizedSpend, annualSavings, company }) {
-    const fallback = buildFallback({ auditedTools, totalSavings, totalCurrentSpend, optimizedSpend, annualSavings });
+    const fallback = buildFallbackSummary({ auditedTools, totalSavings, totalCurrentSpend, optimizedSpend, annualSavings, company });
+    const apiKey = import.meta.env.VITE_ANTHROPIC_API_KEY;
+
+    if (!apiKey) { setSummary(fallback); setSummaryLoading(false); return; }
+
     try {
-      const toolsSummary = auditedTools
+      const toolsSummary = (auditedTools || [])
         .map(t => `${t.name} (${t.plan}, ${t.seats} seat${t.seats !== 1 ? "s" : ""}, $${Number(t.monthlySpend || 0).toFixed(2)}/mo${t.savings > 0 ? `, save $${t.savings.toFixed(2)}/mo` : ""})`)
         .join("; ");
 
-      const prompt = `You are a financial analyst writing a concise executive summary for an AI software spend audit report. Write exactly one paragraph of approximately 100 words. Be specific with dollar figures. Be honest — if savings are minimal, say so without manufacturing false urgency. Avoid filler phrases like "it's worth noting" or "in conclusion".
+      const prompt = buildPrompt({ auditedTools, totalSavings, totalCurrentSpend, optimizedSpend, annualSavings, company, toolsSummary });
+
+      const response = await fetch("https://api.anthropic.com/v1/messages", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "x-api-key": apiKey,
+          "anthropic-version": "2023-06-01",
+          "anthropic-dangerous-direct-browser-access": "true",
+        },
+        body: JSON.stringify({
+          model: "claude-sonnet-4-20250514",
+          max_tokens: 220,
+          messages: [{ role: "user", content: prompt }],
+        }),
+      });
+
+      if (!response.ok) throw new Error(`API ${response.status}`);
+      const data = await response.json();
+      setSummary(data?.content?.[0]?.text?.trim() || fallback);
+    } catch {
+      setSummary(fallback);
+    } finally {
+      setSummaryLoading(false);
+    }
+  }
+
+  function buildPrompt({ auditedTools, totalSavings, totalCurrentSpend, optimizedSpend, annualSavings, company, toolsSummary }) {
+    return `You are a financial analyst writing a concise executive summary for an AI software spend audit report.
+
+Write exactly one paragraph of approximately 100 words. Be specific with dollar figures. Be honest — if savings are minimal or the stack is already well-optimized, say so clearly without manufacturing false urgency. If savings are significant, explain the key drivers matter-of-factly. Avoid filler phrases like "it's worth noting" or "in conclusion". Do not use bullet points or headers. Write in plain, direct language.
 
 Audit data:
 - Total monthly spend: $${totalCurrentSpend.toFixed(2)}
@@ -180,93 +225,98 @@ Audit data:
 - Monthly savings identified: $${totalSavings.toFixed(2)}
 - Annual savings identified: $${annualSavings.toFixed(2)}
 - Tools audited: ${toolsSummary}
-- Primary use case: ${company.useCase}
-- Team size: ${company.teamSize}
+- Primary use case: ${company?.useCase}
+- Team size: ${company?.teamSize}
 
 Write the summary paragraph now:`;
+  }
 
-      const response = await fetch("https://api.anthropic.com/v1/messages", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          "x-api-key": import.meta.env.VITE_ANTHROPIC_API_KEY,
-          "anthropic-version": "2023-06-01",
-          "anthropic-dangerous-direct-browser-access": "true",
-        },
-        body: JSON.stringify({
-          model: "claude-sonnet-4-20250514",
-          max_tokens: 200,
-          messages: [{ role: "user", content: prompt }],
-        }),
-      });
-      if (!response.ok) throw new Error(`API ${response.status}`);
-      const data = await response.json();
-      const text = data?.content?.[0]?.text?.trim();
-      setSummary(text || fallback);
-    } catch (err) {
-      console.warn("AI summary fallback:", err.message);
-      setSummary(fallback);
-    } finally {
-      setLoading(false);
+  function buildFallbackSummary({ auditedTools, totalSavings, totalCurrentSpend, optimizedSpend, annualSavings, company }) {
+    if (totalSavings < 1) {
+      return `Your organization is running ${(auditedTools || []).length} AI tool${(auditedTools || []).length !== 1 ? "s" : ""} at $${totalCurrentSpend.toFixed(2)}/month. Our audit found no material optimization opportunities — your current stack is well-configured for a ${company?.teamSize}-person team focused on ${company?.useCase}. Plan tiers are appropriately sized, there are no detectable redundancies, and pricing aligns with official retail. Consider re-running this audit when you add new tools or your team size changes significantly.`;
     }
+    return `Your organization is running ${(auditedTools || []).length} AI tool${(auditedTools || []).length !== 1 ? "s" : ""} at $${totalCurrentSpend.toFixed(2)}/month. Our audit identified $${totalSavings.toFixed(2)}/month in optimization opportunities — primarily through plan tier adjustments and subscription overlap. Implementing the recommended changes reduces your baseline to $${optimizedSpend.toFixed(2)}/month, recovering $${annualSavings.toFixed(2)} annually while maintaining equivalent model access and team productivity workflows.`;
   }
 
-  function buildFallback({ auditedTools, totalSavings, totalCurrentSpend, optimizedSpend, annualSavings }) {
-    return `Your organization is running ${auditedTools.length} AI subscription${auditedTools.length !== 1 ? "s" : ""} at $${totalCurrentSpend.toFixed(2)}/month. Our audit identified ${totalSavings > 0 ? `$${totalSavings.toFixed(2)}/month in optimization opportunities` : "no material overspend"} through ${totalSavings > 0 ? "plan tier adjustments and redundancy elimination" : "your current lean configuration"}. ${totalSavings > 0 ? `Implementing the recommended changes reduces your baseline to $${optimizedSpend.toFixed(2)}/month — a $${annualSavings.toFixed(2)} annual recovery — while preserving equivalent model access and team productivity.` : "Your stack is well-configured for your team size and use case. We recommend monitoring quarterly as vendor pricing continues to shift."}`;
-  }
+  // ── Lead submit ──────────────────────────────────────────────────────────────
+  // FIX: Email now goes to `email` (user's input), NOT a hardcoded address.
+  // The API route handles actual delivery via Resend to whatever `to` is passed.
+  // syashvi569@gmail.com is only BCCd by the server for high-savings leads.
+  const handleLeadSubmit = useCallback(async () => {
+    // 1. Honeypot check — bots fill hidden fields, real users don't
+    if (honeypotRef.current?.value) {
+      // Silently reject — don't tell bots they were caught
+      setEmailSent(true);
+      return;
+    }
 
-  // ── LEAD CAPTURE SUBMIT ──
-  async function handleLeadSubmit() {
-    // Honeypot check
-    if (honeypotRef.current?.value) return;
-    if (!email || !email.includes("@")) { setEmailError("Please enter a valid email."); return; }
-    if (isRateLimited()) { setEmailError("Too many submissions. Please try again tomorrow."); return; }
+    const cleanEmail = email.trim().toLowerCase();
+
+    // 2. Basic format validation
+    if (!cleanEmail || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(cleanEmail)) {
+      setEmailError("Please enter a valid work email.");
+      return;
+    }
+
+    // 3. Client-side rate limit (server also enforces this by IP)
+    if (isRateLimited()) {
+      setEmailError("Too many submissions today. Try again tomorrow.");
+      return;
+    }
+
     setEmailError("");
     setSubmitting(true);
 
-    const processed = auditData?._processed;
-    const isHighSavings = (processed?.totalSavings || 0) >= 500;
-
     try {
-      // 1. Store lead in Supabase
+      // ── Step A: Store lead in Supabase ──────────────────────────────────────
       const { error: dbError } = await supabase.from("leads").insert({
-        email,
-        company_name: companyName || null,
-        role: role || null,
-        team_size: processed?.company?.teamSize || null,
-        use_case: processed?.company?.useCase || null,
-        monthly_savings: processed?.totalSavings || 0,
-        annual_savings: processed?.annualSavings || 0,
-        is_high_savings: isHighSavings,
+        email: cleanEmail,
+        company_name: companyName.trim() || null,
+        role: role.trim() || null,
+        team_size: auditResult?.company?.teamSize || null,
+        use_case: auditResult?.company?.useCase || null,
+        monthly_savings: auditResult?.totalSavings || 0,
+        annual_savings: auditResult?.annualSavings || 0,
+        is_high_savings: (auditResult?.totalSavings || 0) >= 500,
         share_url: shareUrl || null,
         created_at: new Date().toISOString(),
       });
       if (dbError) throw dbError;
 
-      // 2. Send transactional email via your backend endpoint
-      //    (You can set up a Supabase Edge Function or Render endpoint that calls Resend/Postmark)
-      await fetch("/api/send-audit-email", {
+      // ── Step B: Send transactional email to THE USER'S EMAIL via Resend ─────
+      // `to` is always the user's input — the server BCCs syashvi569@gmail.com
+      // only for high-savings cases so you get alerted, but the user always
+      // gets their own copy at whatever they typed.
+      const emailRes = await fetch("/api/send-audit-email", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          to: email,
-          companyName,
-          totalSavings: processed?.totalSavings,
-          annualSavings: processed?.annualSavings,
-          shareUrl,
-          isHighSavings,
+          to: cleanEmail,                               // ← user's actual email
+          companyName: companyName.trim() || null,
+          totalSavings: auditResult?.totalSavings ?? 0,
+          annualSavings: auditResult?.annualSavings ?? 0,
+          shareUrl: shareUrl || null,
+          isHighSavings: (auditResult?.totalSavings || 0) >= 500,
         }),
-      }).catch(() => {}); // Non-blocking — email failure shouldn't block UX
+      });
 
+      if (!emailRes.ok) {
+        const errBody = await emailRes.json().catch(() => ({}));
+        // Don't fail the whole flow if email fails — lead is already saved
+        console.warn("Email send failed:", errBody.error);
+      }
+
+      // ── Step C: Increment client-side rate limit counter ────────────────────
       incrementRateLimit();
       setEmailSent(true);
+
     } catch (err) {
       console.error("Lead capture error:", err);
       setEmailError("Something went wrong. Please try again.");
     } finally {
       setSubmitting(false);
     }
-  }
+  }, [email, companyName, role, auditResult, shareUrl]);
 
   function handleCopyLink() {
     if (!shareUrl) return;
@@ -275,374 +325,358 @@ Write the summary paragraph now:`;
     setTimeout(() => setCopied(false), 2000);
   }
 
-  // ── GUARD: no data ──
-  if (!loading && (!auditData || (!auditData.fromShare && !auditData.saved?.tools))) {
+  // ── Render: loading ──────────────────────────────────────────────────────────
+  if (pageState === "loading") return <LoadingScreen message="Loading audit…" />;
+
+  // ── Render: not found ────────────────────────────────────────────────────────
+  if (pageState === "notfound") {
     return (
-      <div className="min-h-screen bg-[#f4f7fb] flex items-center justify-center p-5 font-sans">
-        <div className="bg-white p-10 rounded-3xl text-center w-full max-w-md shadow-sm border border-gray-100">
+      <div className="min-h-screen bg-[#f4f7fb] flex items-center justify-center p-6 font-sans">
+        <div className="bg-white p-8 rounded-3xl text-center w-full max-w-md shadow-sm border border-gray-100">
           <h2 className="text-2xl font-black text-[#032b1f]">
             {isPublicView ? "Audit Not Found" : "No Audit Data Found"}
           </h2>
-          <p className="text-sm text-gray-500 mt-2">
-            {isPublicView ? "This link may have expired or been removed." : "Please complete the inventory inputs first."}
+          <p className="text-sm text-gray-500 mt-2 mb-6">
+            {isPublicView
+              ? "This share link may have expired or been removed."
+              : "Please complete the audit form first."}
           </p>
-          {!isPublicView && (
-            <button onClick={() => navigate("/form")} className="mt-6 bg-[#032f24] text-white border-none py-3.5 px-6 rounded-2xl font-bold hover:opacity-90 transition w-full">
-              Back To Form
-            </button>
-          )}
+          <button
+            onClick={() => navigate("/form")}
+            className="bg-[#032f24] text-white py-3.5 px-6 rounded-2xl font-bold hover:opacity-90 transition w-full text-sm"
+          >
+            {isPublicView ? "Run Your Own Audit →" : "Go to Form →"}
+          </button>
         </div>
       </div>
     );
   }
 
-  // ── DERIVE DISPLAY VALUES ──
-  const processed = auditData?._processed;
-  if (!processed && !loading) return null;
+  // ── Destructure audit result ─────────────────────────────────────────────────
+  const {
+    auditedTools = [],
+    totalSavings = 0,
+    totalCurrentSpend = 0,
+    optimizedSpend = 0,
+    annualSavings = 0,
+    company = {},
+  } = auditResult;
 
-  const auditedTools = processed?.auditedTools || [];
-  const totalSavings = processed?.totalSavings || 0;
-  const totalCurrentSpend = processed?.totalCurrentSpend || 0;
-  const optimizedSpend = processed?.optimizedSpend || 0;
-  const annualSavings = processed?.annualSavings || 0;
-  const company = processed?.company || {};
-  const savingsTier = totalSavings >= 500 ? "high" : totalSavings < 100 ? "low" : "mid";
+  const isHighSavings = totalSavings >= 500;
+  const isLowSavings  = totalSavings < 100;
 
-  // ─────────────────────────────────────────────
-  // RENDER
-  // ─────────────────────────────────────────────
+  const inputBase = (dark) =>
+    `rounded-xl px-4 py-3.5 text-sm outline-none transition w-full font-semibold ${
+      dark
+        ? "bg-white/10 border border-white/20 text-white placeholder-blue-300/50 focus:border-blue-400"
+        : "bg-gray-50 border border-gray-200 text-gray-800 placeholder-gray-400 focus:border-[#032f24]"
+    }`;
+
+  // ── Render: full page ────────────────────────────────────────────────────────
   return (
-    <div className="min-h-screen bg-[#f4f7fb] py-8 px-4 font-sans text-[#032b1f]">
-      <div className="max-w-2xl mx-auto">
+    <div className="min-h-screen bg-[#f5f7fc] py-10 px-4 sm:px-8 lg:px-12 font-sans text-[#032b1f]">
+      <div className="w-full max-w-screen-xl mx-auto space-y-6">
 
-        {/* ── PUBLIC BADGE ── */}
+        {/* ── PUBLIC VIEW BADGE ── */}
         {isPublicView && (
-          <div className="flex items-center justify-center gap-2 mb-5">
-            <span className="bg-white border border-gray-200 text-gray-500 text-[11px] font-bold px-4 py-1.5 rounded-full shadow-sm">
-              🔗 Shared audit — company details removed for privacy
+          <div className="text-center">
+            <span className="bg-[#d9f5df] text-[#0b5d3b] text-xs font-bold px-5 py-2 rounded-full border border-emerald-200 shadow-sm inline-block">
+              🔒 Shared Report View — Corporate Details Anonymized
             </span>
           </div>
         )}
 
-        {/* ── HERO ── */}
-        <div className="bg-[#032f24] rounded-[32px] p-7 sm:p-10 text-white mb-6 shadow-lg relative overflow-hidden">
+        {/* ── HERO BANNER ── */}
+        <div className="bg-[#032f24] rounded-[32px] p-8 lg:p-12 text-white shadow-sm relative overflow-hidden">
           <div className="absolute inset-0 opacity-5 pointer-events-none"
             style={{ backgroundImage: "radial-gradient(circle at 80% 20%, #10b981 0%, transparent 60%)" }} />
 
-          <div className="inline-flex items-center gap-1.5 bg-white/10 px-3.5 py-1.5 rounded-full text-[11px] font-extrabold tracking-widest uppercase mb-5 relative z-10">
-            ✦ AI Spend Audit Report
+          <div className="flex flex-col lg:flex-row lg:items-start lg:justify-between gap-8 relative z-10">
+            <div>
+              <div className="inline-flex items-center gap-1.5 bg-white/10 px-4 py-1.5 rounded-full text-[10px] font-extrabold tracking-widest uppercase mb-4">
+                ✦ AI Spend Audit Report
+              </div>
+              <h1 className="text-3xl lg:text-5xl font-black tracking-tight leading-tight">
+                Your Optimization<br className="hidden lg:block" /> Summary
+              </h1>
+              <p className="text-white/60 text-sm mt-3 font-medium">
+                {auditedTools.length} platform{auditedTools.length !== 1 ? "s" : ""} checked
+                {company.teamSize ? ` · ${company.teamSize} operators` : ""}
+                {company.useCase ? ` · ${company.useCase} focus` : ""}
+              </p>
+            </div>
+
+            <div className="grid grid-cols-3 gap-4 lg:gap-6 w-full lg:w-auto lg:min-w-[520px] border-t border-white/10 pt-6 lg:border-t-0 lg:pt-0 lg:border-l lg:border-white/10 lg:pl-10">
+              <div className="bg-white/5 border border-white/5 rounded-2xl p-4 lg:p-6">
+                <span className="text-[10px] font-bold tracking-widest text-gray-400 uppercase block mb-1">Current Spend</span>
+                <h2 className="text-xl lg:text-3xl font-black text-white tabular-nums">
+                  ${totalCurrentSpend.toLocaleString()}<span className="text-xs font-semibold text-white/40 ml-0.5">/mo</span>
+                </h2>
+              </div>
+              <div className="bg-[#10b981]/10 border border-[#10b981]/20 rounded-2xl p-4 lg:p-6">
+                <span className="text-[10px] font-bold tracking-widest text-emerald-300 uppercase block mb-1">Monthly Savings</span>
+                <h2 className="text-xl lg:text-3xl font-black text-[#10b981] tabular-nums">
+                  ${totalSavings.toLocaleString()}<span className="text-xs font-semibold text-emerald-500/60 ml-0.5">/mo</span>
+                </h2>
+              </div>
+              <div className="bg-white/5 border border-white/5 rounded-2xl p-4 lg:p-6">
+                <span className="text-[10px] font-bold tracking-widest text-gray-400 uppercase block mb-1">Annual Savings</span>
+                <h2 className="text-xl lg:text-3xl font-black text-white tabular-nums">
+                  ${annualSavings.toLocaleString()}<span className="text-xs font-semibold text-white/40 ml-0.5">/yr</span>
+                </h2>
+              </div>
+            </div>
           </div>
-
-          <h1 className="text-3xl sm:text-4xl font-black tracking-tight leading-tight relative z-10">
-            Your Optimization Summary
-          </h1>
-          <p className="text-white/60 text-sm mt-2 relative z-10">
-            {loading ? "Analyzing your stack…" : `${auditedTools.length} tool${auditedTools.length !== 1 ? "s" : ""} audited · ${company.teamSize} person team · ${company.useCase} workflows`}
-          </p>
-
-          <div className="grid grid-cols-2 gap-4 mt-8 border-t border-white/10 pt-6 relative z-10">
-            <div className="bg-white/5 rounded-2xl p-5 text-left border border-white/5">
-              <span className="text-[10px] uppercase font-black tracking-widest text-emerald-300 block mb-1">Monthly Savings</span>
-              <h2 className="text-3xl sm:text-4xl font-black text-[#10b981] tabular-nums">
-                {loading ? <span className="opacity-40">—</span> : `$${totalSavings.toLocaleString("en-US", { minimumFractionDigits: 2 })}`}
-              </h2>
-            </div>
-            <div className="bg-white/5 rounded-2xl p-5 text-left border border-white/5">
-              <span className="text-[10px] uppercase font-black tracking-widest text-emerald-300 block mb-1">Annual Savings</span>
-              <h2 className="text-3xl sm:text-4xl font-black text-white tabular-nums">
-                {loading ? <span className="opacity-40">—</span> : `$${annualSavings.toLocaleString("en-US", { minimumFractionDigits: 2 })}`}
-              </h2>
-            </div>
-          </div>
-
-          {!loading && (
-            <div className="mt-4 flex items-center gap-3 text-xs text-white/40 relative z-10">
-              <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 inline-block"></span>
-              Current spend ${totalCurrentSpend.toFixed(2)}/mo → Optimized ${optimizedSpend.toFixed(2)}/mo
-            </div>
-          )}
         </div>
 
-        {/* ── SHARE LINK BAR (non-public view only) ── */}
+        {/* ── SHARE LINK (owner view only) ── */}
         {!isPublicView && shareUrl && (
-          <div className="bg-white border border-gray-100 rounded-2xl px-5 py-4 mb-6 flex items-center justify-between gap-3 shadow-sm">
+          <div className="bg-white border border-gray-100 rounded-3xl p-5 flex flex-col sm:flex-row items-center justify-between gap-4 shadow-sm">
             <div className="min-w-0">
-              <p className="text-[10px] font-black uppercase tracking-widest text-gray-400 mb-0.5">Shareable Link</p>
-              <p className="text-xs text-gray-500 truncate">{shareUrl}</p>
+              <span className="text-[10px] font-black uppercase tracking-widest text-gray-400 block">Shareable Link</span>
+              <p className="text-xs text-gray-500 truncate mt-1 font-medium">{shareUrl}</p>
             </div>
             <button
               onClick={handleCopyLink}
-              className={`flex-shrink-0 text-xs font-black px-4 py-2 rounded-xl transition ${copied ? "bg-emerald-50 text-emerald-700 border border-emerald-100" : "bg-gray-50 text-gray-700 border border-gray-200 hover:bg-gray-100"}`}
+              className={`w-full sm:w-auto px-6 py-3 rounded-xl text-xs font-black shrink-0 transition ${
+                copied
+                  ? "bg-emerald-50 text-emerald-700 border border-emerald-100"
+                  : "bg-gray-50 border border-gray-200 hover:bg-gray-100 text-gray-700"
+              }`}
             >
               {copied ? "✓ Copied!" : "Copy Link"}
             </button>
           </div>
         )}
 
-        {/* ── PER-TOOL BREAKDOWN ── */}
-        {!loading && (
-          <div className="space-y-3 mb-6">
-            <h3 className="text-[11px] font-black text-gray-400 uppercase tracking-widest px-1 text-left mb-3">
-              Per-Tool Breakdown
+        {/* ── TWO-COLUMN LAYOUT ── */}
+        <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 items-start">
+
+          {/* LEFT: Per-tool breakdown */}
+          <div className="lg:col-span-2 space-y-4">
+            <h3 className="text-[10px] font-black text-gray-400 uppercase tracking-widest px-1">
+              Per-Tool Financial Impact
             </h3>
 
             {auditedTools.map((tool, idx) => {
               const failingChecks = (tool.checks || []).filter(c => !c.passed && c.savings > 0);
               const topCheck = failingChecks.sort((a, b) => b.savings - a.savings)[0];
-              const anyFail = (tool.checks || []).some(c => !c.passed);
+              const anyFail  = (tool.checks || []).some(c => !c.passed);
 
               let actionLabel = "No changes needed";
               if (topCheck) {
-                actionLabel = topCheck.recommendation.split("→")[0]?.trim() || topCheck.title;
-                if (actionLabel.length > 60) actionLabel = actionLabel.slice(0, 57) + "…";
+                const raw = topCheck.recommendation?.split("→")[0]?.trim() || topCheck.title || "Review plan";
+                actionLabel = raw.length > 50 ? raw.slice(0, 47) + "…" : raw;
               } else if (anyFail) {
-                const nonSavingsFail = (tool.checks || []).find(c => !c.passed);
-                actionLabel = (nonSavingsFail?.title?.slice(0, 57) + "…") || "Review recommended";
+                const f = (tool.checks || []).find(c => !c.passed);
+                actionLabel = ((f?.title || "Review recommended").slice(0, 47)) + (f?.title?.length > 47 ? "…" : "");
               }
 
-              const rawReason = topCheck?.reason || (tool.checks || []).find(c => !c.passed)?.reason || "This tool is correctly configured for your team size and use case.";
+              const rawReason = topCheck?.reason
+                || (tool.checks || []).find(c => !c.passed)?.reason
+                || "This tool is correctly configured for your team size and use case.";
               const oneLineReason = rawReason.split(/(?<=[.!?])\s+/)[0] || rawReason;
+
               const emoji = TOOL_EMOJI[tool.name] || TOOL_EMOJI.default;
 
               return (
-                <div key={idx} className="bg-white rounded-2xl border border-gray-100 shadow-sm overflow-hidden">
-                  <div className="flex items-center justify-between px-5 py-4 border-b border-gray-50">
-                    <div className="flex items-center gap-3">
-                      <div className="w-8 h-8 rounded-xl bg-gray-50 border border-gray-100 flex items-center justify-center text-base">{emoji}</div>
-                      <div>
-                        <p className="font-black text-[15px] text-gray-900 leading-none">{tool.name}</p>
-                        <p className="text-[11px] text-gray-400 mt-0.5">{tool.plan} · {tool.seats} seat{Number(tool.seats) !== 1 ? "s" : ""}</p>
+                <div key={idx} className="bg-white rounded-3xl border border-gray-100 shadow-sm overflow-hidden text-left w-full">
+                  <div className="flex items-center justify-between px-5 py-4 lg:px-6 lg:py-5 border-b border-gray-50 bg-white">
+                    <div className="flex items-center gap-3 min-w-0">
+                      <div className="w-10 h-10 rounded-xl bg-gray-50 border flex items-center justify-center text-base shrink-0">
+                        {emoji}
+                      </div>
+                      <div className="min-w-0">
+                        <p className="font-black text-sm lg:text-base text-gray-900 leading-tight truncate">{tool.name}</p>
+                        <p className="text-[10px] text-gray-400 mt-0.5 truncate">{tool.plan} Plan · {tool.seats} User License{tool.seats !== 1 ? "s" : ""}</p>
                       </div>
                     </div>
                     {tool.savings > 0 ? (
-                      <span className="bg-emerald-50 text-emerald-700 font-black text-[11px] px-3 py-1 rounded-full border border-emerald-100 whitespace-nowrap">
+                      <span className="bg-emerald-50 text-emerald-700 border border-emerald-100 font-black text-[10px] px-3 py-1.5 rounded-full shrink-0 uppercase tracking-wider">
                         Save ${tool.savings.toFixed(0)}/mo
                       </span>
                     ) : (
-                      <span className="bg-gray-50 text-gray-400 font-bold text-[11px] px-3 py-1 rounded-full border border-gray-100">Optimal</span>
+                      <span className="bg-gray-50 text-gray-400 border border-gray-200 font-bold text-[10px] px-3 py-1.5 rounded-full shrink-0 uppercase tracking-wider">
+                        Optimal ✓
+                      </span>
                     )}
                   </div>
 
-                  <div className="grid grid-cols-3 divide-x divide-gray-50 text-center">
-                    <div className="px-3 py-3.5">
-                      <p className="text-[10px] text-gray-400 font-bold uppercase tracking-wide mb-1">Current Spend</p>
-                      <p className="text-sm font-black text-gray-800">${Number(tool.monthlySpend || 0).toFixed(2)}<span className="text-[10px] font-medium text-gray-400">/mo</span></p>
+                  <div className="grid grid-cols-3 divide-x divide-gray-50 text-center bg-white border-b border-gray-50">
+                    <div className="px-3 py-4">
+                      <p className="text-[9px] text-gray-400 font-bold uppercase tracking-wider mb-1">Current Spend</p>
+                      <p className="text-xs lg:text-sm font-black text-gray-800">${Number(tool.monthlySpend || 0).toFixed(0)}/mo</p>
                     </div>
-                    <div className="px-3 py-3.5">
-                      <p className="text-[10px] text-gray-400 font-bold uppercase tracking-wide mb-1">Recommended Action</p>
-                      <p className={`text-[11px] font-bold leading-tight ${tool.savings > 0 ? "text-emerald-700" : "text-gray-600"}`}>{actionLabel}</p>
+                    <div className="px-3 py-4 flex flex-col justify-center items-center">
+                      <p className="text-[9px] text-gray-400 font-bold uppercase tracking-wider mb-1">Recommended Action</p>
+                      <p className={`text-[10px] lg:text-xs font-black leading-tight text-center ${tool.savings > 0 ? "text-emerald-700" : "text-gray-500"}`}>
+                        {actionLabel}
+                      </p>
                     </div>
-                    <div className="px-3 py-3.5">
-                      <p className="text-[10px] text-gray-400 font-bold uppercase tracking-wide mb-1">Monthly Impact</p>
-                      <p className={`text-sm font-black ${tool.savings > 0 ? "text-emerald-600" : "text-gray-400"}`}>
-                        {tool.savings > 0 ? `-$${tool.savings.toFixed(2)}` : "—"}
+                    <div className="px-3 py-4">
+                      <p className="text-[9px] text-gray-400 font-bold uppercase tracking-wider mb-1">Monthly Savings</p>
+                      <p className={`text-xs lg:text-sm font-black ${tool.savings > 0 ? "text-emerald-600" : "text-gray-300"}`}>
+                        {tool.savings > 0 ? `-$${tool.savings.toFixed(0)}` : "—"}
                       </p>
                     </div>
                   </div>
 
-                  <div className="px-5 py-3 bg-gray-50/60 border-t border-gray-50">
-                    <p className="text-[11px] text-gray-500 leading-relaxed italic">"{oneLineReason}"</p>
+                  <div className="px-5 lg:px-6 py-3.5 bg-gray-50/50">
+                    <p className="text-[11px] lg:text-xs text-gray-500 leading-relaxed italic">"{oneLineReason}"</p>
                   </div>
                 </div>
               );
             })}
           </div>
-        )}
 
-        {/* ── CTA BLOCKS (savings-tier conditional) ── */}
-        {!loading && !isPublicView && (
-          <>
-            {savingsTier === "high" && (
-              <div className="rounded-3xl mb-6 overflow-hidden shadow-lg border border-blue-800/20">
-                <div className="bg-gradient-to-br from-[#0f1f6e] to-[#0d0d2b] p-6 sm:p-8 text-white text-left">
-                  <div className="flex items-start gap-3 mb-4">
-                    <div className="w-10 h-10 rounded-2xl bg-blue-500/20 border border-blue-400/20 flex items-center justify-center text-xl flex-shrink-0">🎯</div>
-                    <div>
-                      <p className="text-[10px] uppercase font-black tracking-widest text-blue-300 mb-1">High Savings Detected</p>
-                      <h4 className="text-xl font-black tracking-tight leading-snug">
-                        You're leaving ${totalSavings.toFixed(0)}/mo on the table.<br />
-                        <span className="text-blue-300">Credex can recover it faster.</span>
-                      </h4>
-                    </div>
-                  </div>
-                  <p className="text-sm text-blue-200/80 leading-relaxed mb-1">
-                    At <span className="text-white font-bold">${annualSavings.toLocaleString("en-US", { maximumFractionDigits: 0 })}/year</span> in identified savings, your stack qualifies for Credex's enterprise optimization program — negotiated credits, consolidated billing, and vendor-matched alternatives that go beyond what a self-serve audit captures.
-                  </p>
-                  <p className="text-xs text-blue-300/60 mb-5">Corporate credit programs up to $100,000 · No commitment required</p>
+          {/* RIGHT: Sidebar */}
+          <div className="lg:col-span-1 space-y-5">
 
-                  {/* High-savings lead capture */}
-                  {emailSent ? (
-                    <div className="bg-white/10 rounded-2xl py-4 px-5 text-center border border-white/10 mb-4">
-                      <p className="text-sm font-black text-emerald-300">✓ Confirmed. A Credex analyst will reach out within 24 hours.</p>
-                    </div>
-                  ) : (
-                    <div className="space-y-2 mb-4">
-                      {/* Honeypot (hidden from real users) */}
-                      <input ref={honeypotRef} type="text" name="website" tabIndex={-1} style={{ position: "absolute", left: "-9999px", opacity: 0 }} autoComplete="off" />
-                      <div className="grid grid-cols-2 gap-2">
-                        <input
-                          type="text"
-                          value={companyName}
-                          onChange={e => setCompanyName(e.target.value)}
-                          placeholder="Company name"
-                          className="bg-white/10 border border-white/20 rounded-xl px-4 py-3 text-sm text-white placeholder-blue-300/50 outline-none focus:border-blue-400 transition"
-                        />
-                        <input
-                          type="text"
-                          value={role}
-                          onChange={e => setRole(e.target.value)}
-                          placeholder="Your role"
-                          className="bg-white/10 border border-white/20 rounded-xl px-4 py-3 text-sm text-white placeholder-blue-300/50 outline-none focus:border-blue-400 transition"
-                        />
-                      </div>
-                      <input
-                        type="email"
-                        value={email}
-                        onChange={e => setEmail(e.target.value)}
-                        placeholder="Work email"
-                        className="w-full bg-white/10 border border-white/20 rounded-xl px-4 py-3 text-sm text-white placeholder-blue-300/50 outline-none focus:border-blue-400 transition"
-                      />
-                      {emailError && <p className="text-xs text-red-300 px-1">{emailError}</p>}
-                    </div>
-                  )}
+            {/* ── LEAD CAPTURE FORM ── */}
+            {!isPublicView && (
+              <div className="bg-white rounded-3xl p-6 border border-gray-100 shadow-sm text-left w-full">
+                {isLowSavings ? (
+                  <>
+                    <h3 className="text-base font-black text-gray-900 mb-1">✅ You're spending well.</h3>
+                    <p className="text-[12px] text-gray-500 leading-relaxed mb-4">
+                      Your AI stack is already lean and correctly configured. No significant savings opportunities exist right now. Enter your email and we'll notify you when new optimizations apply to your stack — vendor pricing changes, new alternatives, or better plans for your team size.
+                    </p>
+                  </>
+                ) : isHighSavings ? (
+                  <>
+                    <h3 className="text-base font-black text-gray-900 mb-1">📋 Lock in your audit report</h3>
+                    <p className="text-[12px] text-gray-500 leading-relaxed mb-4">
+                      Get a copy of this audit sent to your inbox and receive alerts if any of your vendor pricing changes.
+                    </p>
+                  </>
+                ) : (
+                  <>
+                    <h3 className="text-base font-black text-gray-900 mb-1">⚡ Get your audit report</h3>
+                    <p className="text-[12px] text-gray-500 leading-relaxed mb-4">
+                      We'll email you this audit and alert you when new savings opportunities apply to your stack.
+                    </p>
+                  </>
+                )}
 
-                  <button
-                    type="button"
-                    onClick={emailSent ? () => window.open("https://credex.rocks", "_blank") : handleLeadSubmit}
-                    disabled={submitting}
-                    className="w-full bg-white text-[#0f1f6e] py-4 rounded-2xl text-sm font-black shadow-xl hover:bg-blue-50 transition active:scale-[0.99] tracking-tight disabled:opacity-60"
-                  >
-                    {submitting ? "Submitting…" : emailSent ? "Schedule Free Credex Consultation →" : "Connect With a Credex Analyst →"}
-                  </button>
-                  <p className="text-[10px] text-blue-300/40 text-center mt-3">Takes 2 minutes · No credit card · Talk to a human analyst</p>
-                </div>
-              </div>
-            )}
-
-            {savingsTier === "low" && (
-              <div className="bg-white border border-gray-200 rounded-3xl p-6 mb-6 text-left shadow-sm">
-                <div className="flex items-center gap-2 mb-3">
-                  <span className="text-2xl">✅</span>
-                  <h4 className="font-black text-gray-900 text-base">You're spending well.</h4>
-                </div>
-                <p className="text-sm text-gray-600 leading-relaxed mb-1">
-                  Your AI stack is lean and appropriately configured for a {company.teamSize}-person team doing {company.useCase} work.
-                  {totalSavings > 0 ? ` We found $${totalSavings.toFixed(2)}/mo in minor optimizations above, but no structural overspend.` : " We found no structural overspend."}
-                </p>
-                <p className="text-xs text-gray-400 mt-1 mb-5">Vendor pricing shifts frequently. We'll notify you if a better option appears for your stack.</p>
                 {emailSent ? (
-                  <div className="bg-emerald-50 border border-emerald-100 rounded-2xl py-3.5 px-5 text-center">
-                    <p className="text-sm font-black text-emerald-700">✓ You're on the list. We'll reach out when something changes.</p>
+                  <div className="bg-emerald-50 border border-emerald-100 rounded-2xl p-4 text-center font-bold text-sm text-emerald-800 leading-relaxed">
+                    ✓ Got it. Check your inbox — we'll be in touch.
                   </div>
                 ) : (
-                  <div className="space-y-2">
-                    <input ref={honeypotRef} type="text" name="website" tabIndex={-1} style={{ position: "absolute", left: "-9999px", opacity: 0 }} autoComplete="off" />
-                    <div className="flex flex-col sm:flex-row gap-2">
-                      <input
-                        type="email"
-                        value={email}
-                        onChange={e => setEmail(e.target.value)}
-                        placeholder="you@company.com"
-                        className="border border-gray-200 rounded-xl px-4 py-3 text-sm outline-none bg-gray-50 focus:border-[#032f24] transition grow"
-                      />
-                      <button type="button" onClick={handleLeadSubmit} disabled={submitting}
-                        className="bg-[#032f24] text-white text-sm font-bold px-5 py-3 rounded-xl hover:opacity-95 transition tracking-wide shadow-sm whitespace-nowrap disabled:opacity-60">
-                        {submitting ? "…" : "Notify Me"}
-                      </button>
-                    </div>
-                    {emailError && <p className="text-xs text-red-500 px-1">{emailError}</p>}
+                  <div className="space-y-3">
+                    {/* ── HONEYPOT: hidden field bots fill, humans ignore ─────── */}
+                    <input
+                      ref={honeypotRef}
+                      type="text"
+                      name="website"
+                      tabIndex={-1}
+                      style={{ position: "absolute", left: "-9999px", opacity: 0, pointerEvents: "none" }}
+                      autoComplete="off"
+                      aria-hidden="true"
+                    />
+                    <input
+                      type="text"
+                      value={companyName}
+                      onChange={e => setCompanyName(e.target.value)}
+                      placeholder="Company name (optional)"
+                      className={inputBase(false)}
+                      autoComplete="organization"
+                    />
+                    <input
+                      type="text"
+                      value={role}
+                      onChange={e => setRole(e.target.value)}
+                      placeholder="Your role (optional)"
+                      className={inputBase(false)}
+                      autoComplete="organization-title"
+                    />
+                    <input
+                      type="email"
+                      required
+                      value={email}
+                      onChange={e => setEmail(e.target.value)}
+                      placeholder="Work email *"
+                      className={inputBase(false)}
+                      autoComplete="email"
+                    />
+                    {emailError && (
+                      <p className="text-xs text-red-500 px-1 font-bold">{emailError}</p>
+                    )}
+                    <button
+                      type="button"
+                      onClick={handleLeadSubmit}
+                      disabled={submitting}
+                      className="w-full bg-[#032f24] text-white text-xs font-black py-4 rounded-xl hover:opacity-95 transition tracking-wide shadow-sm disabled:opacity-40 uppercase"
+                    >
+                      {submitting
+                        ? "Sending…"
+                        : isLowSavings
+                          ? "Notify Me of New Optimizations →"
+                          : "Send Me the Audit Report →"}
+                    </button>
+                    <p className="text-[10px] text-gray-400 text-center font-medium">
+                      No spam. Unsubscribe any time. Protected by rate limiting + honeypot.
+                    </p>
                   </div>
                 )}
               </div>
             )}
 
-            {savingsTier === "mid" && (
-              <div className="bg-white border border-gray-100 rounded-3xl p-6 mb-6 shadow-sm text-left">
-                <p className="text-[11px] uppercase font-black text-gray-400 tracking-widest mb-2">Next Step</p>
-                <h4 className="font-black text-gray-900 text-base mb-2">Implement the changes above and save ${annualSavings.toFixed(0)}/year.</h4>
-                <p className="text-xs text-gray-500 leading-relaxed mb-5">
-                  The optimizations identified are self-serve — billing plan changes and seat adjustments you can make today. Get notified when new opportunities appear for your stack.
+            {/* ── AI SUMMARY ── */}
+            <div className="bg-white rounded-3xl p-6 border border-gray-100 shadow-sm text-left w-full">
+              <div className="flex items-center gap-2 mb-3">
+                <span className="text-xs font-black bg-gray-100 w-6 h-6 rounded-md flex items-center justify-center text-gray-500">✦</span>
+                <h2 className="text-sm font-black tracking-tight text-gray-900">AI-Generated Performance Summary</h2>
+              </div>
+
+              <div className="bg-gray-50 rounded-2xl p-4 border border-gray-100 text-xs text-gray-600 leading-relaxed font-medium italic">
+                {summaryLoading ? (
+                  <div className="flex items-center gap-2.5 text-gray-400 text-xs py-1">
+                    <span className="flex gap-1">
+                      {[0, 150, 300].map(d => (
+                        <span key={d} className="w-1.5 h-1.5 rounded-full bg-gray-300 animate-bounce"
+                          style={{ animationDelay: `${d}ms` }} />
+                      ))}
+                    </span>
+                    <span>Generating personalized analysis…</span>
+                  </div>
+                ) : summary}
+              </div>
+
+              <p className="text-[9px] text-gray-400 mt-3 px-1 leading-relaxed font-medium">
+                ℹ️ Generated via Claude · Pricing benchmarks verified May 2026 · No credentials stored
+              </p>
+            </div>
+
+            {/* ── PUBLIC VIEW CTA ── */}
+            {isPublicView && (
+              <div className="text-center pt-2">
+                <button
+                  type="button"
+                  onClick={() => navigate("/form")}
+                  className="w-full bg-[#032f24] text-white py-4 px-8 rounded-2xl font-black text-sm hover:opacity-95 transition shadow-sm"
+                >
+                  Audit Your Own Stack →
+                </button>
+                <p className="text-[10px] text-gray-400 mt-2.5 font-bold uppercase tracking-wider">
+                  Free · Takes 3 minutes · Powered by Credex
                 </p>
-                {emailSent ? (
-                  <div className="bg-emerald-50 border border-emerald-100 rounded-2xl py-3.5 px-5 text-center">
-                    <p className="text-sm font-black text-emerald-700">✓ Saved. We'll track pricing changes for your stack.</p>
-                  </div>
-                ) : (
-                  <div className="space-y-2">
-                    <input ref={honeypotRef} type="text" name="website" tabIndex={-1} style={{ position: "absolute", left: "-9999px", opacity: 0 }} autoComplete="off" />
-                    <div className="grid grid-cols-2 gap-2">
-                      <input type="text" value={companyName} onChange={e => setCompanyName(e.target.value)} placeholder="Company (optional)"
-                        className="border border-gray-200 rounded-xl px-4 py-3 text-xs outline-none bg-gray-50 focus:border-[#032f24] transition" />
-                      <input type="text" value={role} onChange={e => setRole(e.target.value)} placeholder="Role (optional)"
-                        className="border border-gray-200 rounded-xl px-4 py-3 text-xs outline-none bg-gray-50 focus:border-[#032f24] transition" />
-                    </div>
-                    <div className="flex flex-col sm:flex-row gap-2">
-                      <input type="email" value={email} onChange={e => setEmail(e.target.value)} placeholder="Work email for stack monitoring"
-                        className="border border-gray-200 rounded-xl px-4 py-3 text-xs outline-none bg-gray-50 focus:border-[#032f24] transition grow" />
-                      <button type="button" onClick={handleLeadSubmit} disabled={submitting}
-                        className="bg-[#032f24] text-white text-xs font-bold px-5 py-3 rounded-xl hover:opacity-95 transition tracking-wide shadow-sm whitespace-nowrap disabled:opacity-60">
-                        {submitting ? "…" : "Track My Stack"}
-                      </button>
-                    </div>
-                    {emailError && <p className="text-xs text-red-500 px-1">{emailError}</p>}
-                  </div>
-                )}
               </div>
             )}
-          </>
-        )}
 
-        {/* ── AI SUMMARY CARD ── */}
-        <div className="bg-white rounded-[28px] p-6 sm:p-8 border border-gray-100 shadow-sm text-left">
-          <div className="flex items-center gap-2 mb-4">
-            <div className="w-7 h-7 rounded-xl bg-[#032f24]/10 flex items-center justify-center text-sm">✦</div>
-            <h2 className="text-lg font-black tracking-tight text-gray-900">AI Financial Evaluation</h2>
-          </div>
-
-          <div className="bg-gray-50/80 rounded-2xl p-5 border border-gray-100 text-sm text-gray-700 leading-7 font-medium min-h-[80px]">
-            {loading ? (
-              <div className="flex items-center gap-2.5 text-gray-400 text-xs py-2">
-                <span className="flex gap-1">
-                  <span className="w-1.5 h-1.5 rounded-full bg-gray-300 animate-bounce" style={{ animationDelay: "0ms" }}></span>
-                  <span className="w-1.5 h-1.5 rounded-full bg-gray-300 animate-bounce" style={{ animationDelay: "150ms" }}></span>
-                  <span className="w-1.5 h-1.5 rounded-full bg-gray-300 animate-bounce" style={{ animationDelay: "300ms" }}></span>
-                </span>
-                <span>Generating personalized summary…</span>
+            {/* ── OWNER VIEW: New Audit ── */}
+            {!isPublicView && (
+              <div className="text-center pt-1">
+                <button
+                  onClick={() => { localStorage.removeItem("credexAuditForm"); navigate("/form"); }}
+                  className="w-full bg-[#032f24] text-white py-3.5 rounded-2xl font-bold text-xs hover:opacity-90 transition"
+                >
+                  New Stack Audit
+                </button>
               </div>
-            ) : (
-              <p>{summary}</p>
             )}
           </div>
-
-          <p className="text-[10px] text-gray-400 mt-3 px-1 leading-relaxed">
-            ℹ️ Generated by Claude using verified May 2026 pricing data. Summary reflects audit findings only — no data is stored.
-          </p>
         </div>
-
-        {/* ── BACK / RESTART ── */}
-        {!isPublicView && (
-          <div className="flex gap-3 mt-6">
-            <button onClick={() => navigate("/audit")}
-              className="flex-1 border border-gray-200 bg-white text-gray-600 py-3.5 rounded-2xl font-bold text-sm hover:bg-gray-50 transition">
-              ← Back to Audit Detail
-            </button>
-            <button onClick={() => { localStorage.removeItem("credexAuditForm"); navigate("/form"); }}
-              className="flex-1 bg-[#032f24] text-white py-3.5 rounded-2xl font-bold text-sm hover:opacity-90 transition">
-              New Audit
-            </button>
-          </div>
-        )}
-
-        {isPublicView && (
-          <div className="mt-6 text-center">
-            <button onClick={() => navigate("/form")}
-              className="bg-[#032f24] text-white py-3.5 px-8 rounded-2xl font-bold text-sm hover:opacity-90 transition inline-block">
-              Audit Your Own Stack →
-            </button>
-            <p className="text-xs text-gray-400 mt-2">Free · Takes 3 minutes · Powered by Credex</p>
-          </div>
-        )}
-
       </div>
     </div>
   );
