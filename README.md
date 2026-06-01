@@ -8,7 +8,7 @@ The platform provides a real-time audit engine, AI-generated executive summaries
 
 # Live Demo
 
-Deployed URL:https://credex-ai-audit-app.vercel.app/
+Deployed URL:https://credex-ai-audit-app.vercel.app
 
 
 GitHub Repository:https://github.com/yashvishah925/credex-ai-audit
