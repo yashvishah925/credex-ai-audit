@@ -1,3 +1,4 @@
+import PublicAuditPage from "./pages/PublicAuditPage";
 import { BrowserRouter, Routes, Route } from "react-router-dom";
 
 import LandingPage from "./pages/LandingPage";
@@ -23,7 +24,7 @@ function App() {
         <Route path="/summary" element={<SummaryPage />} />
 
         {/* Shareable Public URL */}
-        <Route path="/share/:shareId" element={<SummaryPage />} />
+        <Route path="/share/:shareId" element={<PublicAuditPage />} />
 
       </Routes>
     </BrowserRouter>

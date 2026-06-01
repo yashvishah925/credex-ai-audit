@@ -547,5 +547,3 @@ export function runAudit(tools, company) {
     annualSavings: totalSavings * 12
   };
 }
-
-

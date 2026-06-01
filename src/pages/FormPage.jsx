@@ -93,80 +93,58 @@ function FormPage() {
     SUBMIT
   */
   async function handleSubmit(e) {
-    e.preventDefault();
+  e.preventDefault();
 
+  try {
+    const publicId = Date.now().toString();
+
+    const totalSavings = tools.reduce((sum, tool) => {
+      return sum + Number(tool.monthlySpend || 0);
+    }, 0);
+
+    const { error } = await supabase
+      .from("leads")
+      .insert([
+        {
+          email: "demo@credex.ai",
+          company: company.useCase,
+          role: "Founder",
+          team_size: company.teamSize,
+          monthly_savings: totalSavings,
+          public_id: publicId,
+          audit_data: { company, tools }
+        }
+      ]);
+
+    if (error) {
+      console.error(error);
+      alert("Failed to save audit: " + error.message);
+      return;
+    }
+
+    localStorage.setItem("publicAuditId", publicId);
+
+    // ✅ FIXED: wrapped so a missing API route doesn't crash the flow
     try {
-      /*
-        GENERATE PUBLIC SHARE ID
-      */
-      const publicId = crypto.randomUUID();
-
-      /*
-        CALCULATE TOTAL SPEND
-      */
-      const totalSavings = tools.reduce((sum, tool) => {
-        return sum + Number(tool.monthlySpend || 0);
-      }, 0);
-
-      /*
-        SAVE TO SUPABASE
-      */
-      const { error } = await supabase
-        .from("leads")
-        .insert([
-          {
-            email: "demo@credex.ai",
-            company: company.useCase,
-            role: "Founder",
-            team_size: company.teamSize,
-            monthly_savings: totalSavings,
-            public_id: publicId,
-            audit_data: {
-              company,
-              tools
-            }
-          }
-        ]);
-
-      if (error) {
-        console.error(error);
-        alert("Failed to save audit");
-        return;
-      }
-
-      /*
-        SAVE PUBLIC ID
-      */
-      localStorage.setItem(
-        "publicAuditId",
-        publicId
-      );
-
-      /*
-        SEND EMAIL
-      */
-      await fetch("http://localhost:5000/send-email", {
+      await fetch("/api/send-email", {
         method: "POST",
-        headers: {
-          "Content-Type": "application/json"
-        },
+        headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          email: "syashvi569@gmail.com",
+        
           savings: totalSavings
         })
       });
-
-      /*
-        GO TO PUBLIC SHAREABLE PAGE
-      */
-      navigate("/audit");
-
-    } catch (err) {
-      console.error(err);
-      alert("Something went wrong");
+    } catch (emailErr) {
+      console.warn("Email failed, continuing:", emailErr);
     }
-  }
 
+    navigate("/audit");
+
+  } catch (err) {
+    console.error(err);
+    alert("Error: " + err.message); // temporary — shows real error
+  }
+}
   return (
     <div className="min-h-screen bg-[#f5f7fc] text-[#032b1f] px-6 sm:px-12 py-16 font-sans">
       <div className="w-full max-w-5xl mx-auto">

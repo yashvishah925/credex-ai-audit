@@ -15,8 +15,7 @@ const TOOL_EMOJI = {
   default: "🤖",
 };
 
-// ─── Rate limiting (localStorage-backed, client-side layer 1 of 2) ────────────
-// Layer 2 is enforced server-side in the API route by IP address.
+// ── Rate limiting ─────────────────────────────────────────────────────────────
 function getRateLimitKey() { return `credex_lead_ts_${new Date().toDateString()}`; }
 function isRateLimited() {
   try { return parseInt(localStorage.getItem(getRateLimitKey()) || "0") >= 3; }
@@ -29,7 +28,7 @@ function incrementRateLimit() {
   } catch {}
 }
 
-// ─── OG / Twitter meta tags ──────────────────────────────────────────────────
+// ── OG meta tags (client-side fallback) ──────────────────────────────────────
 function setOGMeta({ title, description, url }) {
   const set = (prop, content) => {
     let el = document.querySelector(`meta[property="${prop}"]`)
@@ -56,7 +55,7 @@ function setOGMeta({ title, description, url }) {
   set("twitter:image", `${window.location.origin}/og-preview.png`);
 }
 
-// ─── Loading screen ───────────────────────────────────────────────────────────
+// ── Loading screen ────────────────────────────────────────────────────────────
 function LoadingScreen({ message = "Loading audit…" }) {
   return (
     <div className="min-h-screen bg-[#f4f7fb] flex items-center justify-center px-4">
@@ -73,7 +72,7 @@ function LoadingScreen({ message = "Loading audit…" }) {
   );
 }
 
-// ─── Main component ───────────────────────────────────────────────────────────
+// ── Main component ────────────────────────────────────────────────────────────
 function SummaryPage() {
   const navigate = useNavigate();
   const { shareId } = useParams();
@@ -81,7 +80,6 @@ function SummaryPage() {
 
   const [pageState, setPageState] = useState("loading");
   const [auditResult, setAuditResult] = useState(null);
-  const [publicMeta, setPublicMeta] = useState(null);
 
   const [summary, setSummary] = useState("");
   const [summaryLoading, setSummaryLoading] = useState(true);
@@ -96,15 +94,15 @@ function SummaryPage() {
   const [emailError, setEmailError] = useState("");
   const [submitting, setSubmitting] = useState(false);
 
-  // ── Honeypot ref — hidden field bots fill, humans don't ──────────────────────
   const honeypotRef = useRef(null);
 
-  // ── Load & process audit data ────────────────────────────────────────────────
+  // ── Load audit data ───────────────────────────────────────────────────────
   useEffect(() => {
     let cancelled = false;
 
     async function init() {
       if (isPublicView) {
+        // Public share view — load from audit_shares table
         const { data, error } = await supabase
           .from("audit_shares")
           .select("tools_data, company_use_case, company_team_size, audit_results")
@@ -115,8 +113,12 @@ function SummaryPage() {
         if (error || !data) { setPageState("notfound"); return; }
 
         const audit = data.audit_results;
-        const company = { useCase: data.company_use_case, teamSize: data.company_team_size };
+        const company = {
+          useCase: data.company_use_case,
+          teamSize: data.company_team_size,
+        };
 
+        // Set OG tags for social sharing
         setOGMeta({
           title: `AI Stack Audit — ${audit.totalSavings > 0 ? `Save $${Math.round(audit.totalSavings * 12)}/yr` : "Optimized Stack"} · Credex`,
           description: `${company.teamSize}-person team · ${audit.auditedTools?.length || 0} tools audited · Powered by Credex`,
@@ -124,11 +126,11 @@ function SummaryPage() {
         });
 
         setAuditResult({ ...audit, company });
-        setPublicMeta({ teamSize: company.teamSize, useCase: company.useCase });
         setPageState("ready");
         fetchAISummary({ ...audit, company });
 
       } else {
+        // Owner view — load from localStorage
         let saved = null;
         try { saved = JSON.parse(localStorage.getItem("credexAuditForm")); } catch {}
 
@@ -143,8 +145,11 @@ function SummaryPage() {
         setAuditResult({ ...audit, company });
         setPageState("ready");
 
+        // Generate shareable link — no personal info stored
         generateShareRecord({ tools, company, audit }).then(id => {
-          if (!cancelled && id) setShareUrl(`${window.location.origin}/share/${id}`);
+          if (!cancelled && id) {
+            setShareUrl(`${window.location.origin}/share/${id}`);
+          }
         });
 
         fetchAISummary({ ...audit, company });
@@ -155,13 +160,13 @@ function SummaryPage() {
     return () => { cancelled = true; };
   }, [shareId]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // ── Share record ─────────────────────────────────────────────────────────────
+  // ── Create share record (no email, no company name — anonymized) ──────────
   async function generateShareRecord({ tools, company, audit }) {
     try {
       const id = Date.now().toString();
       const { error } = await supabase.from("audit_shares").insert({
         share_id: id,
-        tools_data: tools,
+        tools_data: tools,                        // tools + savings only, no PII
         company_use_case: company.useCase,
         company_team_size: company.teamSize,
         audit_results: audit,
@@ -175,7 +180,7 @@ function SummaryPage() {
     }
   }
 
-  // ── AI summary ───────────────────────────────────────────────────────────────
+  // ── AI summary ────────────────────────────────────────────────────────────
   async function fetchAISummary({ auditedTools, totalSavings, totalCurrentSpend, optimizedSpend, annualSavings, company }) {
     const fallback = buildFallbackSummary({ auditedTools, totalSavings, totalCurrentSpend, optimizedSpend, annualSavings, company });
     const apiKey = import.meta.env.VITE_ANTHROPIC_API_KEY;
@@ -186,8 +191,6 @@ function SummaryPage() {
       const toolsSummary = (auditedTools || [])
         .map(t => `${t.name} (${t.plan}, ${t.seats} seat${t.seats !== 1 ? "s" : ""}, $${Number(t.monthlySpend || 0).toFixed(2)}/mo${t.savings > 0 ? `, save $${t.savings.toFixed(2)}/mo` : ""})`)
         .join("; ");
-
-      const prompt = buildPrompt({ auditedTools, totalSavings, totalCurrentSpend, optimizedSpend, annualSavings, company, toolsSummary });
 
       const response = await fetch("https://api.anthropic.com/v1/messages", {
         method: "POST",
@@ -200,7 +203,23 @@ function SummaryPage() {
         body: JSON.stringify({
           model: "claude-sonnet-4-20250514",
           max_tokens: 220,
-          messages: [{ role: "user", content: prompt }],
+          messages: [{
+            role: "user",
+            content: `You are a financial analyst writing a concise executive summary for an AI software spend audit report.
+
+Write exactly one paragraph of approximately 100 words. Be specific with dollar figures. Be honest — if savings are minimal or the stack is already well-optimized, say so clearly without manufacturing false urgency. Avoid filler phrases. Do not use bullet points or headers. Write in plain, direct language.
+
+Audit data:
+- Total monthly spend: $${totalCurrentSpend.toFixed(2)}
+- Optimized monthly spend: $${optimizedSpend.toFixed(2)}
+- Monthly savings identified: $${totalSavings.toFixed(2)}
+- Annual savings identified: $${annualSavings.toFixed(2)}
+- Tools audited: ${toolsSummary}
+- Primary use case: ${company?.useCase}
+- Team size: ${company?.teamSize}
+
+Write the summary paragraph now:`,
+          }],
         }),
       });
 
@@ -214,51 +233,28 @@ function SummaryPage() {
     }
   }
 
-  function buildPrompt({ auditedTools, totalSavings, totalCurrentSpend, optimizedSpend, annualSavings, company, toolsSummary }) {
-    return `You are a financial analyst writing a concise executive summary for an AI software spend audit report.
-
-Write exactly one paragraph of approximately 100 words. Be specific with dollar figures. Be honest — if savings are minimal or the stack is already well-optimized, say so clearly without manufacturing false urgency. If savings are significant, explain the key drivers matter-of-factly. Avoid filler phrases like "it's worth noting" or "in conclusion". Do not use bullet points or headers. Write in plain, direct language.
-
-Audit data:
-- Total monthly spend: $${totalCurrentSpend.toFixed(2)}
-- Optimized monthly spend: $${optimizedSpend.toFixed(2)}
-- Monthly savings identified: $${totalSavings.toFixed(2)}
-- Annual savings identified: $${annualSavings.toFixed(2)}
-- Tools audited: ${toolsSummary}
-- Primary use case: ${company?.useCase}
-- Team size: ${company?.teamSize}
-
-Write the summary paragraph now:`;
-  }
-
   function buildFallbackSummary({ auditedTools, totalSavings, totalCurrentSpend, optimizedSpend, annualSavings, company }) {
     if (totalSavings < 1) {
-      return `Your organization is running ${(auditedTools || []).length} AI tool${(auditedTools || []).length !== 1 ? "s" : ""} at $${totalCurrentSpend.toFixed(2)}/month. Our audit found no material optimization opportunities — your current stack is well-configured for a ${company?.teamSize}-person team focused on ${company?.useCase}. Plan tiers are appropriately sized, there are no detectable redundancies, and pricing aligns with official retail. Consider re-running this audit when you add new tools or your team size changes significantly.`;
+      return `Your organization is running ${(auditedTools || []).length} AI tool${(auditedTools || []).length !== 1 ? "s" : ""} at $${totalCurrentSpend.toFixed(2)}/month. Our audit found no material optimization opportunities — your current stack is well-configured for a ${company?.teamSize}-person team focused on ${company?.useCase}. Consider re-running this audit when you add new tools or your team size changes significantly.`;
     }
-    return `Your organization is running ${(auditedTools || []).length} AI tool${(auditedTools || []).length !== 1 ? "s" : ""} at $${totalCurrentSpend.toFixed(2)}/month. Our audit identified $${totalSavings.toFixed(2)}/month in optimization opportunities — primarily through plan tier adjustments and subscription overlap. Implementing the recommended changes reduces your baseline to $${optimizedSpend.toFixed(2)}/month, recovering $${annualSavings.toFixed(2)} annually while maintaining equivalent model access and team productivity workflows.`;
+    return `Your organization is running ${(auditedTools || []).length} AI tool${(auditedTools || []).length !== 1 ? "s" : ""} at $${totalCurrentSpend.toFixed(2)}/month. Our audit identified $${totalSavings.toFixed(2)}/month in optimization opportunities — primarily through plan tier adjustments and subscription overlap. Implementing the recommended changes reduces your baseline to $${optimizedSpend.toFixed(2)}/month, recovering $${annualSavings.toFixed(2)} annually.`;
   }
 
-  // ── Lead submit ──────────────────────────────────────────────────────────────
-  // FIX: Email now goes to `email` (user's input), NOT a hardcoded address.
-  // The API route handles actual delivery via Resend to whatever `to` is passed.
-  // syashvi569@gmail.com is only BCCd by the server for high-savings leads.
+  // ── Lead submit ───────────────────────────────────────────────────────────
   const handleLeadSubmit = useCallback(async () => {
-    // 1. Honeypot check — bots fill hidden fields, real users don't
+    // Honeypot check
     if (honeypotRef.current?.value) {
-      // Silently reject — don't tell bots they were caught
-      setEmailSent(true);
+      setEmailSent(true); // silently reject bots
       return;
     }
 
     const cleanEmail = email.trim().toLowerCase();
 
-    // 2. Basic format validation
     if (!cleanEmail || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(cleanEmail)) {
-      setEmailError("Please enter a valid work email.");
+      setEmailError("Please enter a valid email address.");
       return;
     }
 
-    // 3. Client-side rate limit (server also enforces this by IP)
     if (isRateLimited()) {
       setEmailError("Too many submissions today. Try again tomorrow.");
       return;
@@ -268,45 +264,59 @@ Write the summary paragraph now:`;
     setSubmitting(true);
 
     try {
-      // ── Step A: Store lead in Supabase ──────────────────────────────────────
+      // ── Step A: Save lead to Supabase using YOUR existing schema ───────────
       const { error: dbError } = await supabase.from("leads").insert({
         email: cleanEmail,
-        company_name: companyName.trim() || null,
+        company: companyName.trim() || null,      // maps to your 'company' column
         role: role.trim() || null,
         team_size: auditResult?.company?.teamSize || null,
-        use_case: auditResult?.company?.useCase || null,
         monthly_savings: auditResult?.totalSavings || 0,
         annual_savings: auditResult?.annualSavings || 0,
-        is_high_savings: (auditResult?.totalSavings || 0) >= 500,
-        share_url: shareUrl || null,
+        public_id: shareUrl ? shareUrl.split("/share/")[1] || null : null,
+        audit_data: {                              // store extra context here
+          useCase: auditResult?.company?.useCase,
+          tools: auditResult?.auditedTools?.map(t => ({
+            name: t.name,
+            plan: t.plan,
+            seats: t.seats,
+            savings: t.savings,
+          })),
+          isHighSavings: (auditResult?.totalSavings || 0) >= 500,
+          shareUrl: shareUrl || null,
+        },
         created_at: new Date().toISOString(),
       });
-      if (dbError) throw dbError;
 
-      // ── Step B: Send transactional email to THE USER'S EMAIL via Resend ─────
-      // `to` is always the user's input — the server BCCs syashvi569@gmail.com
-      // only for high-savings cases so you get alerted, but the user always
-      // gets their own copy at whatever they typed.
-      const emailRes = await fetch("/api/send-audit-email", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          to: cleanEmail,                               // ← user's actual email
-          companyName: companyName.trim() || null,
-          totalSavings: auditResult?.totalSavings ?? 0,
-          annualSavings: auditResult?.annualSavings ?? 0,
-          shareUrl: shareUrl || null,
-          isHighSavings: (auditResult?.totalSavings || 0) >= 500,
-        }),
-      });
-
-      if (!emailRes.ok) {
-        const errBody = await emailRes.json().catch(() => ({}));
-        // Don't fail the whole flow if email fails — lead is already saved
-        console.warn("Email send failed:", errBody.error);
+      if (dbError) {
+        console.error("Supabase insert error:", dbError);
+        // Don't block the flow — still try to send email
       }
 
-      // ── Step C: Increment client-side rate limit counter ────────────────────
+      // ── Step B: Send transactional email to USER's entered email ──────────
+      try {
+        const emailRes = await fetch("/api/send-audit-email", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            to: cleanEmail,                        // ← always the user's email
+            companyName: companyName.trim() || null,
+            totalSavings: auditResult?.totalSavings ?? 0,
+            annualSavings: auditResult?.annualSavings ?? 0,
+            shareUrl: shareUrl || null,
+            isHighSavings: (auditResult?.totalSavings || 0) >= 500,
+          }),
+        });
+
+        if (!emailRes.ok) {
+          const errBody = await emailRes.json().catch(() => ({}));
+          console.warn("Email send failed:", errBody.error);
+          // Graceful fallback — lead is saved, email just didn't send
+        }
+      } catch (emailErr) {
+        console.warn("Email fetch failed, continuing:", emailErr.message);
+        // App continues working even if email fails
+      }
+
       incrementRateLimit();
       setEmailSent(true);
 
@@ -325,10 +335,9 @@ Write the summary paragraph now:`;
     setTimeout(() => setCopied(false), 2000);
   }
 
-  // ── Render: loading ──────────────────────────────────────────────────────────
+  // ── Render states ─────────────────────────────────────────────────────────
   if (pageState === "loading") return <LoadingScreen message="Loading audit…" />;
 
-  // ── Render: not found ────────────────────────────────────────────────────────
   if (pageState === "notfound") {
     return (
       <div className="min-h-screen bg-[#f4f7fb] flex items-center justify-center p-6 font-sans">
@@ -352,7 +361,6 @@ Write the summary paragraph now:`;
     );
   }
 
-  // ── Destructure audit result ─────────────────────────────────────────────────
   const {
     auditedTools = [],
     totalSavings = 0,
@@ -365,14 +373,9 @@ Write the summary paragraph now:`;
   const isHighSavings = totalSavings >= 500;
   const isLowSavings  = totalSavings < 100;
 
-  const inputBase = (dark) =>
-    `rounded-xl px-4 py-3.5 text-sm outline-none transition w-full font-semibold ${
-      dark
-        ? "bg-white/10 border border-white/20 text-white placeholder-blue-300/50 focus:border-blue-400"
-        : "bg-gray-50 border border-gray-200 text-gray-800 placeholder-gray-400 focus:border-[#032f24]"
-    }`;
+  const inputBase =
+    "rounded-xl px-4 py-3.5 text-sm outline-none transition w-full font-semibold bg-gray-50 border border-gray-200 text-gray-800 placeholder-gray-400 focus:border-[#032f24]";
 
-  // ── Render: full page ────────────────────────────────────────────────────────
   return (
     <div className="min-h-screen bg-[#f5f7fc] py-10 px-4 sm:px-8 lg:px-12 font-sans text-[#032b1f]">
       <div className="w-full max-w-screen-xl mx-auto space-y-6">
@@ -381,7 +384,7 @@ Write the summary paragraph now:`;
         {isPublicView && (
           <div className="text-center">
             <span className="bg-[#d9f5df] text-[#0b5d3b] text-xs font-bold px-5 py-2 rounded-full border border-emerald-200 shadow-sm inline-block">
-              🔒 Shared Report View — Corporate Details Anonymized
+              🔒 Shared Report View — Company details anonymized
             </span>
           </div>
         )}
@@ -433,7 +436,9 @@ Write the summary paragraph now:`;
         {!isPublicView && shareUrl && (
           <div className="bg-white border border-gray-100 rounded-3xl p-5 flex flex-col sm:flex-row items-center justify-between gap-4 shadow-sm">
             <div className="min-w-0">
-              <span className="text-[10px] font-black uppercase tracking-widest text-gray-400 block">Shareable Link</span>
+              <span className="text-[10px] font-black uppercase tracking-widest text-gray-400 block">
+                🔗 Shareable Link — no personal info included
+              </span>
               <p className="text-xs text-gray-500 truncate mt-1 font-medium">{shareUrl}</p>
             </div>
             <button
@@ -476,7 +481,6 @@ Write the summary paragraph now:`;
                 || (tool.checks || []).find(c => !c.passed)?.reason
                 || "This tool is correctly configured for your team size and use case.";
               const oneLineReason = rawReason.split(/(?<=[.!?])\s+/)[0] || rawReason;
-
               const emoji = TOOL_EMOJI[tool.name] || TOOL_EMOJI.default;
 
               return (
@@ -488,7 +492,9 @@ Write the summary paragraph now:`;
                       </div>
                       <div className="min-w-0">
                         <p className="font-black text-sm lg:text-base text-gray-900 leading-tight truncate">{tool.name}</p>
-                        <p className="text-[10px] text-gray-400 mt-0.5 truncate">{tool.plan} Plan · {tool.seats} User License{tool.seats !== 1 ? "s" : ""}</p>
+                        <p className="text-[10px] text-gray-400 mt-0.5 truncate">
+                          {tool.plan} Plan · {tool.seats} User License{tool.seats !== 1 ? "s" : ""}
+                        </p>
                       </div>
                     </div>
                     {tool.savings > 0 ? (
@@ -532,39 +538,39 @@ Write the summary paragraph now:`;
           {/* RIGHT: Sidebar */}
           <div className="lg:col-span-1 space-y-5">
 
-            {/* ── LEAD CAPTURE FORM ── */}
+            {/* ── LEAD CAPTURE (owner view only) ── */}
             {!isPublicView && (
               <div className="bg-white rounded-3xl p-6 border border-gray-100 shadow-sm text-left w-full">
                 {isLowSavings ? (
                   <>
                     <h3 className="text-base font-black text-gray-900 mb-1">✅ You're spending well.</h3>
                     <p className="text-[12px] text-gray-500 leading-relaxed mb-4">
-                      Your AI stack is already lean and correctly configured. No significant savings opportunities exist right now. Enter your email and we'll notify you when new optimizations apply to your stack — vendor pricing changes, new alternatives, or better plans for your team size.
+                      Your AI stack is already lean. Enter your email and we'll notify you when new optimizations apply.
                     </p>
                   </>
                 ) : isHighSavings ? (
                   <>
                     <h3 className="text-base font-black text-gray-900 mb-1">📋 Lock in your audit report</h3>
                     <p className="text-[12px] text-gray-500 leading-relaxed mb-4">
-                      Get a copy of this audit sent to your inbox and receive alerts if any of your vendor pricing changes.
+                      Get this audit emailed to you. For high-savings cases, a Credex advisor will follow up.
                     </p>
                   </>
                 ) : (
                   <>
                     <h3 className="text-base font-black text-gray-900 mb-1">⚡ Get your audit report</h3>
                     <p className="text-[12px] text-gray-500 leading-relaxed mb-4">
-                      We'll email you this audit and alert you when new savings opportunities apply to your stack.
+                      We'll email you this audit and alert you when new savings opportunities apply.
                     </p>
                   </>
                 )}
 
                 {emailSent ? (
                   <div className="bg-emerald-50 border border-emerald-100 rounded-2xl p-4 text-center font-bold text-sm text-emerald-800 leading-relaxed">
-                    ✓ Got it. Check your inbox — we'll be in touch.
+                    ✓ Got it. Check your inbox — your report is on its way.
                   </div>
                 ) : (
                   <div className="space-y-3">
-                    {/* ── HONEYPOT: hidden field bots fill, humans ignore ─────── */}
+                    {/* Honeypot — bots fill this, humans don't see it */}
                     <input
                       ref={honeypotRef}
                       type="text"
@@ -579,7 +585,7 @@ Write the summary paragraph now:`;
                       value={companyName}
                       onChange={e => setCompanyName(e.target.value)}
                       placeholder="Company name (optional)"
-                      className={inputBase(false)}
+                      className={inputBase}
                       autoComplete="organization"
                     />
                     <input
@@ -587,7 +593,7 @@ Write the summary paragraph now:`;
                       value={role}
                       onChange={e => setRole(e.target.value)}
                       placeholder="Your role (optional)"
-                      className={inputBase(false)}
+                      className={inputBase}
                       autoComplete="organization-title"
                     />
                     <input
@@ -595,8 +601,8 @@ Write the summary paragraph now:`;
                       required
                       value={email}
                       onChange={e => setEmail(e.target.value)}
-                      placeholder="Work email *"
-                      className={inputBase(false)}
+                      placeholder="Your email *"
+                      className={inputBase}
                       autoComplete="email"
                     />
                     {emailError && (
@@ -615,7 +621,7 @@ Write the summary paragraph now:`;
                           : "Send Me the Audit Report →"}
                     </button>
                     <p className="text-[10px] text-gray-400 text-center font-medium">
-                      No spam. Unsubscribe any time. Protected by rate limiting + honeypot.
+                      No spam · Unsubscribe any time · Protected by rate limiting + honeypot
                     </p>
                   </div>
                 )}
@@ -628,7 +634,6 @@ Write the summary paragraph now:`;
                 <span className="text-xs font-black bg-gray-100 w-6 h-6 rounded-md flex items-center justify-center text-gray-500">✦</span>
                 <h2 className="text-sm font-black tracking-tight text-gray-900">AI-Generated Performance Summary</h2>
               </div>
-
               <div className="bg-gray-50 rounded-2xl p-4 border border-gray-100 text-xs text-gray-600 leading-relaxed font-medium italic">
                 {summaryLoading ? (
                   <div className="flex items-center gap-2.5 text-gray-400 text-xs py-1">
@@ -642,7 +647,6 @@ Write the summary paragraph now:`;
                   </div>
                 ) : summary}
               </div>
-
               <p className="text-[9px] text-gray-400 mt-3 px-1 leading-relaxed font-medium">
                 ℹ️ Generated via Claude · Pricing benchmarks verified May 2026 · No credentials stored
               </p>
@@ -664,7 +668,7 @@ Write the summary paragraph now:`;
               </div>
             )}
 
-            {/* ── OWNER VIEW: New Audit ── */}
+            {/* ── OWNER: Start new audit ── */}
             {!isPublicView && (
               <div className="text-center pt-1">
                 <button
