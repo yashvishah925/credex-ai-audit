@@ -131,3 +131,56 @@ docs/
  ├── ECONOMICS.md
  ├── PROMPTS.md
  └── REFLECTION.md
+
+Current Deployment Notes
+
+## Transactional Email Infrastructure
+
+The platform includes a fully implemented transactional email workflow using Resend serverless APIs and backend lead-capture logic. During development deployment, Resend sandbox restrictions limit unrestricted delivery to arbitrary recipient addresses unless a verified sending domain is configured.
+
+The backend email architecture is production-ready and dynamically routes emails based on user-entered input, but unrestricted public email delivery would require:
+
+* Verified production sender domain
+* DNS authentication (SPF/DKIM)
+* Production email configuration
+
+The current deployment preserves:
+
+* Lead capture flow
+* Backend API integration
+* Email generation logic
+* Dynamic recipient routing
+* Graceful failure handling
+
+## Shareable Public Audit URLs
+
+Unique public audit URLs are implemented and routed through dedicated public audit pages. Public-facing reports sanitize personally identifiable information and expose only optimization-relevant audit data.
+
+Open Graph and Twitter preview metadata are partially implemented and may vary depending on deployment cache behavior during preview generation.
+
+## Security + Abuse Protection
+
+The application implements:
+
+* Supabase backend persistence
+* Environment-variable based secret management
+* Honeypot anti-spam protection
+* Client-side rate limiting
+* Graceful API failure fallbacks
+
+No sensitive API secrets are committed to the repository.
+
+## MVP Scope
+
+This project was intentionally optimized as a functional MVP focused on:
+
+* AI spend analysis
+* pricing optimization logic
+* AI-generated summaries
+* full-stack architecture
+* deployment workflows
+* responsive UX
+* public shareability
+
+rather than production-scale infrastructure hardening.
+
